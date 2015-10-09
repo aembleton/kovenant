@@ -28,19 +28,52 @@ package nl.komponents.kovenant.android
  */
 
 import nl.komponents.kovenant.Context
+import nl.komponents.kovenant.DirectDispatcherContext
 import nl.komponents.kovenant.Kovenant
 import nl.komponents.kovenant.Promise
+import nl.komponents.kovenant.ui.KovenantUi
+import nl.komponents.kovenant.ui.UiContext
+import nl.komponents.kovenant.ui.dispatcherContextFor
+import java.lang.ref.WeakReference
 import nl.komponents.kovenant.ui.alwaysUi as newAlwaysUi
 import nl.komponents.kovenant.ui.failUi as newFailUi
 import nl.komponents.kovenant.ui.promiseOnUi as newPromiseOnUi
 import nl.komponents.kovenant.ui.successUi as newSuccessUi
 
+public fun <C : android.content.Context, V, E> C.successUi(promise: Promise<V, E>,
+                                                           uiContext: UiContext = KovenantUi.uiContext,
+                                                           context: Context = Kovenant.context,
+                                                           body: C.(V) -> Unit): Promise<V, E> {
+    val dispatcherContext = uiContext.dispatcherContextFor(context)
+    if (promise.isDone()) {
+        if (promise.isSuccess()) {
+            try {
+                val value = promise.get()
+                body(value)
+            } catch(e: Exception) {
+                dispatcherContext.errorHandler(e)
+            }
+        }
+        return promise
+    }
+
+    val activityRef = WeakReference<C?>(this)
+
+    promise.success(DirectDispatcherContext) {
+        val androidContext = activityRef.get()
+        if (androidContext != null) {
+            //TODO, need to do this upon actual scheduling.
+        }
+    }
+
+    return promise
+}
 
 @Deprecated("now part of kovenant-ui package, replace imports with 'nl.komponents.kovenant.ui'"
         /*, ReplaceWith("promiseOnUi(context, alwaysSchedule, body)", "nl.komponents.kovenant.ui.promiseOnUi")*/)
 public fun <V> promiseOnUi(context: Context = Kovenant.context,
-                                 alwaysSchedule: Boolean = false,
-                                 body: () -> V): Promise<V, Exception> {
+                           alwaysSchedule: Boolean = false,
+                           body: () -> V): Promise<V, Exception> {
     return newPromiseOnUi(
             context = context,
             alwaysSchedule = alwaysSchedule,
