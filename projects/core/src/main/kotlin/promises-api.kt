@@ -281,7 +281,7 @@ public fun <V, E> deferred(context: Context = Kovenant.context): Deferred<V, E> 
  * @param context the context on which the task is executed and the [Promise] is tied to. `Kovenant.context` by default.
  * @return returns a [Promise] of inferred success type [V] and failure type [Exception]
  */
-public fun async<V>(context: Context = Kovenant.context,
+public fun <V> async(context: Context = Kovenant.context,
                     body: AwaitProvider.() -> V): Promise<V, Exception> = concretePromise(context, body)
 
 /**

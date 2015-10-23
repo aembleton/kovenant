@@ -21,13 +21,10 @@
 
 package nl.komponents.kovenant
 
-import nl.komponents.kovenant.properties.mask
-import nl.komponents.kovenant.properties.unmask
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
-internal fun concretePromise<V>(context: Context, callable: AwaitProvider.() -> V): Promise<V, Exception>
+internal fun <V> concretePromise(context: Context, callable: AwaitProvider.() -> V): Promise<V, Exception>
         = AsyncPromise(context, callable)
 
 internal fun <V, R> concretePromise(context: Context, promise: Promise<V, Exception>, callable: (V) -> R): Promise<R, Exception>

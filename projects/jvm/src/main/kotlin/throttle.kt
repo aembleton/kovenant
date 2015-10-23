@@ -47,7 +47,7 @@ public class Throttle(val maxConcurrentTasks: Int = 1, val context: Context = Ko
      * Registers an async task to be executed somewhere in the near future. Callers must ensure that they call
      * registerDone() with some promise that signals this process is done.
      */
-    public fun <V> registerTask(context: Context = this.context, fn: () -> V): Promise<V, Exception> {
+    public fun <V> registerTask(context: Context = this.context, fn: AwaitProvider.() -> V): Promise<V, Exception> {
         if (semaphore.tryAcquire()) {
             if (workQueue.isEmpty()) {
                 return baseAsync(context, fn)
@@ -68,7 +68,7 @@ public class Throttle(val maxConcurrentTasks: Int = 1, val context: Context = Ko
      * Registers an async task to be executed somewhere in the near future. When this task is done the process is
      * considered to be finished and other tasks are allowed to execute.
      */
-    public fun <V> task(context: Context = this.context, fn: () -> V): Promise<V, Exception> {
+    public fun <V> task(context: Context = this.context, fn: AwaitProvider.() -> V): Promise<V, Exception> {
         return registerTask(context, fn).addDone()
     }
 
@@ -141,7 +141,7 @@ private interface Task {
     fun schedule()
 }
 
-private class AsyncTask<V>(private val context: Context, private val fn: () -> V) : Task {
+private class AsyncTask<V>(private val context: Context, private val fn: AwaitProvider.() -> V) : Task {
     private val deferred: Deferred<V, Exception> = deferred(context)
     val promise: Promise<V, Exception>
         get() = deferred.promise
