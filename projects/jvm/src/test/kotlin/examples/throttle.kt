@@ -19,19 +19,45 @@
  * THE SOFTWARE.
  */
 
-package examples.aforEach
+package examples.throttle
 
-import nl.komponents.kovenant.functional.mapEach
+import nl.komponents.kovenant.Kovenant
+import nl.komponents.kovenant.jvm.Throttle
+import nl.komponents.kovenant.then
 
 fun main(args: Array<String>) {
-    val promise = sequenceOf(12, 13, 14, 15, 16).mapEach {
-        it - 1
+    Kovenant.context {
+        workerContext.dispatcher { concurrentTasks = 8 }
     }
 
-    promise success {
-        it forEach {
-            println(it)
+    val sleepThrottle = Throttle(4)
+    val snoozeThrottle = Throttle(2)
+
+    val promises = (1..10).map { number ->
+        sleepThrottle.task {
+            Thread.sleep(1000)
+            number
+        } success {
+            println("#$it sleeper awakes")
         }
     }
-}
 
+    promises.forEach { promise ->
+        val registeredPromise = snoozeThrottle.registerTask(promise) {
+            Thread.sleep(700)
+        }
+
+        val finalPromise = registeredPromise then {
+            "#${promise.get()} snoozing"
+        }
+
+        snoozeThrottle.registerDone(finalPromise)
+
+        finalPromise success {
+            println(it)
+        }
+
+    }
+
+    println("all tasks created")
+}

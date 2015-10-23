@@ -53,7 +53,11 @@ private class ConcreteDispatcherBuilder : JvmDispatcherBuilder {
     private val pollStrategyBuilder = ConcretePollStrategyBuilder()
 
     override var threadFactory: (target: Runnable, dispatcherName: String, id: Int) -> Thread
-            = fun(target: Runnable, dispatcherName: String, id: Int) = Thread(target, "$dispatcherName-$id")
+            = fun(target: Runnable, dispatcherName: String, id: Int): Thread {
+        val thread = Thread(target, "$dispatcherName-$id")
+        thread.isDaemon = false
+        return thread
+    }
 
 
     override var concurrentTasks: Int
@@ -91,23 +95,23 @@ class ConcretePollStrategyBuilder() : PollStrategyBuilder {
     fun clear() = factories.clear()
 
     override fun yielding(numberOfPolls: Int) {
-        factories add YieldingPollStrategyFactory(attempts = numberOfPolls)
+        factories.add(YieldingPollStrategyFactory(attempts = numberOfPolls))
     }
 
     override fun sleeping(numberOfPolls: Int, sleepTimeInMs: Long) {
-        factories add SleepingPollStrategyFactory(attempts = numberOfPolls, sleepTimeMs = sleepTimeInMs)
+        factories.add(SleepingPollStrategyFactory(attempts = numberOfPolls, sleepTimeMs = sleepTimeInMs))
     }
 
     override fun busy(numberOfPolls: Int) {
-        factories add BusyPollStrategyFactory(attempts = numberOfPolls)
+        factories.add(BusyPollStrategyFactory(attempts = numberOfPolls))
     }
 
     override fun blocking() {
-        factories add BlockingPollStrategyFactory()
+        factories.add(BlockingPollStrategyFactory())
     }
 
     override fun blockingSleep(numberOfPolls: Int, sleepTimeInMs: Long) {
-        factories add BlockingSleepPollStrategyFactory(attempts = numberOfPolls, sleepTimeMs = sleepTimeInMs)
+        factories.add(BlockingSleepPollStrategyFactory(attempts = numberOfPolls, sleepTimeMs = sleepTimeInMs))
     }
 
     private fun buildDefaultStrategy(pollable: Pollable<() -> Unit>): PollStrategy<() -> Unit> {
@@ -115,7 +119,7 @@ class ConcretePollStrategyBuilder() : PollStrategyBuilder {
         return ChainPollStrategyFactory(defaultFactories).build(pollable)
     }
 
-    fun build(pollable: Pollable<() -> Unit>): PollStrategy<() -> Unit> = if (factories.isEmpty()) {
+    public fun build(pollable: Pollable<() -> Unit>): PollStrategy<() -> Unit> = if (factories.isEmpty()) {
         buildDefaultStrategy(pollable)
     } else {
         ChainPollStrategyFactory(factories).build(pollable)
@@ -152,13 +156,13 @@ private class NonBlockingDispatcher(val name: String,
 
     override fun offer(task: () -> Unit): Boolean {
         if (running.get()) {
-            workQueue offer task
+            workQueue.offer(task)
             val threadSize = contextCount.get()
             if (threadSize < numberOfThreads) {
                 val threadNumber = contextCount.incrementAndGet()
-                if (threadNumber <= numberOfThreads && (threadNumber == 1 || threadNumber < workQueue.size())) {
+                if (threadNumber <= numberOfThreads && workQueue.size() > 0) {
                     val newThreadContext = newThreadContext()
-                    threadContexts offer newThreadContext
+                    threadContexts.offer(newThreadContext)
                     if (!running.get()) {
                         //it can be the case that during initialization of the context the dispatcher has been shutdown
                         //and this newly created created is missed. So request shutdown again.
@@ -228,7 +232,7 @@ private class NonBlockingDispatcher(val name: String,
         if (workQueue.remove(task)) return true
 
         //try any of the running threadContexts
-        threadContexts forEach {
+        threadContexts.forEach {
             if (it.cancel(task)) return true
         }
         return false
@@ -276,8 +280,9 @@ private class NonBlockingDispatcher(val name: String,
 
         init {
             thread = threadFactory(this, name, id)
-            thread.setDaemon(false)
-            thread.start()
+            if (!thread.isAlive) {
+                thread.start()
+            }
         }
 
 
@@ -400,7 +405,7 @@ private class NonBlockingDispatcher(val name: String,
         }
 
         fun cancel(task: () -> Unit): Boolean {
-            while (task identityEquals pollResult) {
+            while (task === pollResult) {
                 //Can't catch this at state pending or polling, loop while we are running
 
                 //if we're in running state try interrupting it
@@ -410,7 +415,7 @@ private class NonBlockingDispatcher(val name: String,
 
                     //Though we successfully changed from running to mutating it might
                     //just be a complete different task already. check again
-                    val cancelable = task identityEquals pollResult
+                    val cancelable = task === pollResult
                     if (cancelable) {
                         //interrupt this thread so any running process can catch that
                         thread.interrupt()
@@ -443,7 +448,7 @@ private class NonBlockingDispatcher(val name: String,
 }
 
 
-private interface PollStrategy<V : Any> {
+public interface PollStrategy<V : Any> {
     fun get(): V?
 }
 
@@ -453,7 +458,7 @@ private interface PollStrategyFactory<V : Any> {
 
 private class ChainPollStrategyFactory<V : Any>(private val factories: List<PollStrategyFactory<V>>) : PollStrategyFactory<V> {
     override fun build(pollable: Pollable<V>): PollStrategy<V> {
-        val strategies = factories map { it.build(pollable) }
+        val strategies = factories.map { it.build(pollable) }
         return ChainPollStrategy(strategies)
     }
 }

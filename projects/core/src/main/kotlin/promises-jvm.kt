@@ -30,14 +30,14 @@ import java.util.concurrent.atomic.AtomicReference
 internal fun concretePromise<V>(context: Context, callable: AwaitProvider.() -> V): Promise<V, Exception>
         = AsyncPromise(context, callable)
 
-internal fun concretePromise<V, R>(context: Context, promise: Promise<V, Exception>, callable: (V) -> R): Promise<R, Exception>
+internal fun <V, R> concretePromise(context: Context, promise: Promise<V, Exception>, callable: (V) -> R): Promise<R, Exception>
         = ThenPromise(context, promise, callable)
 
-internal fun concreteSuccessfulPromise<V, E>(context: Context, value: V): Promise<V, E> = SuccessfulPromise(context, value)
+internal fun <V, E> concreteSuccessfulPromise(context: Context, value: V): Promise<V, E> = SuccessfulPromise(context, value)
 
-internal fun concreteFailedPromise<V, E>(context: Context, value: E): Promise<V, E> = FailedPromise(context, value)
+internal fun <V, E> concreteFailedPromise(context: Context, value: E): Promise<V, E> = FailedPromise(context, value)
 
-internal fun concreteDeferred<V, E>(context: Context): Deferred<V, E> = DeferredPromise(context)
+internal fun <V, E> concreteDeferred(context: Context): Deferred<V, E> = DeferredPromise(context)
 
 private class SuccessfulPromise<V, E>(context: Context, value: V) : AbstractPromise<V, E>(context) {
     init {
@@ -113,7 +113,7 @@ private class ThenPromise<V, R>(context: Context,
             }
         }
         task = wrapper
-        context.workerContext offer wrapper
+        context.workerContext.offer(wrapper)
     }
 
 
@@ -154,7 +154,7 @@ private class AsyncPromise<V>(context: Context, callable: AwaitProvider.() -> V)
             }
         }
         task = wrapper
-        context.workerContext offer wrapper
+        context.workerContext.offer(wrapper)
     }
 
     override public fun cancel(error: Exception): Boolean {
@@ -251,7 +251,7 @@ private abstract class AbstractPromise<V, E>(override val context: Context) : Pr
         //Bypass the queue if this promise is resolved and the queue is empty
         //no need to create excess nodes
         if (isSuccessInternal() && isEmptyCallbacks()) {
-            context offer { callback(getAsValueResult()) }
+            context.offer { callback(getAsValueResult()) }
             return this
         }
 
@@ -269,7 +269,7 @@ private abstract class AbstractPromise<V, E>(override val context: Context) : Pr
         //Bypass the queue if this promise is resolved and the queue is empty
         //no need to create excess nodes
         if (isFailureInternal() && isEmptyCallbacks()) {
-            context offer { callback(getAsFailResult()) }
+            context.offer { callback(getAsFailResult()) }
             return this
         }
 
@@ -285,7 +285,7 @@ private abstract class AbstractPromise<V, E>(override val context: Context) : Pr
         //Bypass the queue if this promise is resolved and the queue is empty
         //no need to create excess nodes
         if ((isSuccessInternal() || isFailureInternal()) && isEmptyCallbacks()) {
-            context offer { callback() }
+            context.offer { callback() }
             return this
         }
 
@@ -548,83 +548,6 @@ private abstract class AbstractPromise<V, E>(override val context: Context) : Pr
         override fun runFail(value: E) = context.offer { fn(value) }
     }
 
-}
-
-// Function introduced solely to remain backwards compatible.
-// The default implementation doesn't use these.
-@Deprecated("inefficient, to be removed in version 3.0.0")
-internal fun <V, E> defaultGet(promise: Promise<V, E>): V {
-    val latch = CountDownLatch(1)
-    val e = AtomicReference<E>()
-    val v = AtomicReference<V>()
-
-    promise.success {
-        v.set(it)
-        latch.countDown()
-    } fail {
-        e.set(mask(it))
-        latch.countDown()
-    }
-    latch.await()
-    val error = e.get()
-    if (error != null) {
-        throw unmask<E>(error).asException()
-    }
-    return v.get()
-}
-
-// Function introduced solely to remain backwards compatible.
-// The default implementation doesn't use these.
-@Deprecated("inefficient, to be removed in version 3.0.0")
-internal fun <V, E> defaultGetError(promise: Promise<V, E>): E {
-    val latch = CountDownLatch(1)
-    val e = AtomicReference<E>()
-    val v = AtomicReference<V>()
-
-    promise.success {
-        v.set(mask(it))
-        latch.countDown()
-    } fail {
-        e.set(it)
-        latch.countDown()
-    }
-    latch.await()
-    val value = v.get()
-    if (value != null) {
-        throw FailedException(unmask<V>(value))
-    }
-    return e.get()
-}
-
-
-// Function introduced solely to remain backwards compatible.
-// The default implementation doesn't use these.
-@Deprecated("inefficient, to be removed in version 3.0.0")
-internal fun Promise<*, *>.defaultIsDone(): Boolean {
-    val dispatcherCtx = DispatcherContext.create(DirectDispatcher.instance, context.callbackContext.errorHandler)
-    var called = false
-    always(dispatcherCtx) { called = true }
-    return called
-}
-
-// Function introduced solely to remain backwards compatible.
-// The default implementation doesn't use these.
-@Deprecated("inefficient, to be removed in version 3.0.0")
-internal fun Promise<*, *>.defaultIsFailure(): Boolean {
-    val dispatcherCtx = DispatcherContext.create(DirectDispatcher.instance, context.callbackContext.errorHandler)
-    var called = false
-    fail(dispatcherCtx) { called = true }
-    return called
-}
-
-// Function introduced solely to remain backwards compatible.
-// The default implementation doesn't use these.
-@Deprecated("inefficient, to be removed in version 3.0.0")
-internal fun Promise<*, *>.defaultIsSuccess(): Boolean {
-    val dispatcherCtx = DispatcherContext.create(DirectDispatcher.instance, context.callbackContext.errorHandler)
-    var called = false
-    success(dispatcherCtx) { called = true }
-    return called
 }
 
 private fun <T> T.asException(): Exception {

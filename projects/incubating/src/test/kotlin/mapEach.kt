@@ -19,34 +19,19 @@
  * THE SOFTWARE.
  */
 
-rootProject.name = 'root'
+package examples.aforEach
 
-include 'core'
-include 'combine'
-include 'jvm'
-include 'ui'
-include 'jfx'
-include 'kovenant'
-include 'android'
-include 'disruptor'
-include 'progress'
-include 'functional'
-include 'incubating'
+import nl.komponents.kovenant.incubating.mapEach
 
-rootProject.children.each { project ->
-    String projectFileName = project.name.replaceAll("\\p{Upper}") { "-${it.toLowerCase()}" }
-    String projectDirName = "projects/$projectFileName"
-    project.projectDir = new File(settingsDir, projectDirName)
-    project.buildFileName = "${projectFileName}.gradle"
+fun main(args: Array<String>) {
+    val promise = sequenceOf(12, 13, 14, 15, 16).mapEach {
+        it - 1
+    }
+
+    promise success {
+        it.forEach {
+            println(it)
+        }
+    }
 }
 
-project(':core').name = 'kovenant-core'
-project(':combine').name = 'kovenant-combine'
-project(':jvm').name = 'kovenant-jvm'
-project(':ui').name = 'kovenant-ui'
-project(':jfx').name = 'kovenant-jfx'
-project(':android').name = 'kovenant-android'
-project(':disruptor').name = 'kovenant-disruptor'
-project(':progress').name = 'kovenant-progress'
-project(':functional').name = 'kovenant-functional'
-project(':incubating').name = 'kovenant-incubating'

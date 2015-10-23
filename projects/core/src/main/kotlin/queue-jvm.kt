@@ -24,18 +24,18 @@ package nl.komponents.kovenant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
-internal class NonBlockingWorkQueue<V : Any>() : BlockingSupportWorkQueue<V>() {
+public class NonBlockingWorkQueue<V : Any>() : BlockingSupportWorkQueue<V>() {
     private val queue = ConcurrentLinkedQueue<V>()
 
     override fun tryPoll(): V? = queue.poll()
-    override fun tryOffer(elem: V): Boolean = queue offer elem
+    override fun tryOffer(elem: V): Boolean = queue.offer(elem)
 
-    public override fun size(): Int = queue.size()
+    public override fun size(): Int = queue.size
 
     public override fun isEmpty(): Boolean = queue.isEmpty()
     public override fun isNotEmpty(): Boolean = !isEmpty()
 
-    public override fun remove(elem: Any?): Boolean = queue.remove(elem)
+    public override fun remove(elem: Any?): Boolean = queue.removeRaw(elem)
 }
 
 public abstract class BlockingSupportWorkQueue<V : Any>() : WorkQueue<V> {
