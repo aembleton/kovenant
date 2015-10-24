@@ -263,9 +263,25 @@ private class NonBlockingDispatcher(val name: String,
         return true
     }
 
+    //used for nested tasks
     private class TaskNode(val task: () -> Unit) {
+        @Volatile var next: TaskNode? = null
+        @Volatile var cancelled = false
 
+
+        //only currentThread may update this
+        //no need for volatile
+        var prev: TaskNode? = null
     }
+
+    private inline fun TaskNode?.iterate(cb: (TaskNode) -> Unit) {
+        var head = this
+        while (head != null) {
+            cb(head)
+            head = head.next
+        }
+    }
+
 
     private inner class ThreadContext(val id: Int) : Runnable {
 
@@ -279,6 +295,9 @@ private class NonBlockingDispatcher(val name: String,
         private @Volatile var alive = true
         private @Volatile var keepAlive: Boolean = true
         private @Volatile var pollResult: (() -> Unit)? = null
+
+        //Used when runNext is used
+        private @Volatile var subTasksHead: TaskNode? = null
 
 
         init {
@@ -392,48 +411,46 @@ private class NonBlockingDispatcher(val name: String,
                 if (parentState < running) continue
             } while (!tryChangeState(parentState, mutating))
 
-
-
-
-
             // don't use poll strategy, we are hoping more work
             // because we are waiting for something to finish.
             val fn = workQueue.poll(block = false)
 
-            //TODO setup or append task chain for cancellation
-
-            changeState(mutating, parentState + 1)
-
             // can still be null if other threads have picked up the work
             //we are waiting for
+            var hasRun = false
             if (fn != null) {
+                val node = TaskNode(fn)
+
+                if (subTasksHead == null) {
+                    subTasksHead = node
+                } else {
+                    var tail = subTasksHead!!
+                    while (tail.next != null) tail = tail.next!!
+                    tail.next = node
+                    node.prev = tail
+                }
+
+                changeState(mutating, parentState + 1)
                 try {
                     fn()
                 } catch(e: InterruptedException) {
                     // we only want to report unexpected interrupted exception. The expected
                     // cases are cancellation of a task or a total shutdown of the dispatcher.
-                    // `pollResult == null` means the task has been cancelled.
-                    //TODO build a chain for cancellation
-                    if (pollResult != null && alive) {
+                    if (!isCancelledInChain() && alive) {
                         exceptionHandler(e)
                     }
-
                 } catch(e: Exception) {
                     exceptionHandler(e)
                 } catch(t: Throwable) {
                     // I think the StackOverFlowError is the only one we can reasonably recover from since the
                     // complete stack has been unwound at this point.
-                    if (t !is StackOverflowError) {
-                        // This can be anything. Most likely out of memory errors, so everything can go haywire
-                        // from here. Let's *try* to gracefully dismiss this thread by un registering from the pool and
-                        // die.
-                        deRegisterRequest(this, force = true)
+                    if (t is StackOverflowError) {
+
+                        errorHandler(t)
+                    } else {
+                        // rethrow and let the main runner handle this
+                        throw t
                     }
-
-                    // Try to report it
-                    errorHandler(t)
-
-
                 } finally {
                     // No matter what, we are going to try to clear the interrupted flag if any.
                     // this is because this thread can be in an interrupted state because of cancellation,
@@ -442,14 +459,29 @@ private class NonBlockingDispatcher(val name: String,
                     // the next task.
                     Thread.interrupted()
                 }
-                //TODO, pop task chain
-                changeState(parentState + 1, parentState)
-                return true
+
+                // detach task node
+                val prev = node.prev
+                when (prev) {
+                    null -> subTasksHead = null
+                    else -> prev.next = null
+                }
+
+                changeState(parentState + 1, mutating)
+                hasRun = true
             }
 
-            changeState(parentState + 1, parentState)
-            return false
+            // We might have cancelled some task and the head
+            // task might be it. If so, interrupted the thread
+            // for that task
+            if (isHeadCancelled()) {
+                thread.interrupt()
+            }
+
+            changeState(mutating, parentState)
+            return hasRun
         }
+
 
         /*
         Become 'kamikaze' or just really suicidal. Try to bypass the pollStrategy for quick and clean death.
@@ -465,32 +497,79 @@ private class NonBlockingDispatcher(val name: String,
 
         }
 
+        fun isHeadCancelled(): Boolean {
+            if (subTasksHead == null && pollResult == null) return true
+
+            if (subTasksHead != null) {
+                var tail = subTasksHead!!
+                while (tail.next != null) tail = tail.next!!
+                if (tail.cancelled) return true
+            }
+            return false
+        }
+
+        fun isCancelledInChain(): Boolean {
+            if (pollResult == null) return true
+            subTasksHead.iterate {
+                if (it.cancelled) return true
+            }
+            return false
+        }
+
+        fun isTaskInChain(task: () -> Unit): Boolean {
+            if (task === pollResult) return true
+            return nodeForTask(task) != null
+        }
+
+
+        fun nodeForTask(task: () -> Unit): TaskNode? {
+            subTasksHead.iterate {
+                if (it.task === task) return it
+            }
+            return null
+        }
+
+
         fun cancel(task: () -> Unit): Boolean {
-            while (task === pollResult) {
+            while (isTaskInChain(task)) {
                 //Can't catch this at state pending or polling, loop while we are running
 
                 //if we're in running state try interrupting it
                 //so we need to claim the time for doing this by going from a running to
                 //mutating state
-                if (tryChangeState(running, mutating)) {
+                val currentState = state.get()
+                if (currentState > 0 && tryChangeState(currentState, mutating)) {
 
                     //Though we successfully changed from running to mutating it might
                     //just be a complete different task already. check again
-                    val cancelable = task === pollResult
+                    val cancelable = isTaskInChain(task)
                     if (cancelable) {
-                        //interrupt this thread so any running process can catch that
-                        thread.interrupt()
+                        if (pollResult === task) {
+                            //set pollResult to null to signal we cancelled this task.
+                            //Avoid redundant InterruptedException callbacks
+                            pollResult = null
 
-                        //set pollResult to null to signal we cancelled this task.
-                        //That way we can clear the interrupted flag
-                        pollResult = null
+                            //interrupt this thread if it's actually running
+                            if (subTasksHead == null) {
+                                thread.interrupt()
+                            }
+
+
+                        } else {
+                            val node = nodeForTask(task)!!
+                            node.cancelled = true
+                            if (node.next == null) {
+                                //tail node, thus running, thus interrupt
+                                thread.interrupt()
+                            }
+                        }
                     }
 
-                    //always change back to running
-                    changeState(mutating, running)
+                    // always change back to running
+                    changeState(mutating, currentState)
 
-                    //we had a successful cacncel request
-                    if (cancelable) return true
+                    // return whether we could cancel a task
+                    return cancelable
                 }
             }
             return false
