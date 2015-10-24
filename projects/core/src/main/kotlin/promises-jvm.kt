@@ -171,13 +171,18 @@ private class AsyncPromise<V>(context: Context, callable: AwaitProvider.() -> V)
     }
 
     override fun <V, E> await(promise: Promise<V, E>): V {
+        if (context != promise.context) {
+            throw UnsupportedException("promise does not belong to this context")
+        }
         val dispatcher = promise.context.workerContext.dispatcher
-        if (dispatcher !is HelpableDispatcher)
-            throw UnsupportedException("dispatcher [$dispatcher] is not of type [HelpableDispatcher]")
+        if (dispatcher !is PostponeDispatcher) {
+            throw UnsupportedException("dispatcher [$dispatcher] is not of type [PostponeDispatcher]")
+        }
 
         while (!promise.isDone()){
-            if(!dispatcher.help()) {
-                //This should actually never happen
+            if (!dispatcher.runNext()) {
+                //Happens on the boundary where queue is empty
+                //but task is executed by another thread
                 Thread.yield()
             }
         }

@@ -85,8 +85,21 @@ public interface ProcessAwareDispatcher : Dispatcher {
     fun ownsCurrentProcess(): Boolean
 }
 
-public interface HelpableDispatcher : Dispatcher {
-    fun help(): Boolean
+/**
+ * A PostponeDispatcher let's the current task be postponed
+ * by running a next task in the pool, if any.
+ */
+public interface PostponeDispatcher : Dispatcher {
+    /**
+     * Tries to run the next task in the pool, if any.
+     * Returns true if a task indeed has been taken from the queue. Note that
+     * the task might not have been run if the task is cancelled or the dispatcher shuts down.
+     * Returns false if the backing queue of this dispatcher was empty.
+     *
+     * @throws StateException when this method is invoked by a thread that is not owned by this dispatcher
+     * @return true, if one task has been taken from the queue, false otherwise
+     */
+    fun runNext(): Boolean
 }
 
 public fun buildDispatcher(body: DispatcherBuilder.() -> Unit): Dispatcher = concreteBuildDispatcher(body)

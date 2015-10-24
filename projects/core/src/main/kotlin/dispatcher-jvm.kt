@@ -133,7 +133,7 @@ private class NonBlockingDispatcher(val name: String,
                                     private val errorHandler: (Throwable) -> Unit,
                                     private val workQueue: WorkQueue<() -> Unit>,
                                     private val pollStrategy: PollStrategy<() -> Unit>,
-                                    private val threadFactory: (target: Runnable, dispatcherName: String, id: Int) -> Thread) : ProcessAwareDispatcher, HelpableDispatcher {
+                                    private val threadFactory: (target: Runnable, dispatcherName: String, id: Int) -> Thread) : ProcessAwareDispatcher, PostponeDispatcher {
 
     init {
         if (numberOfThreads < 1) {
@@ -147,9 +147,9 @@ private class NonBlockingDispatcher(val name: String,
 
     private val threadContexts = ConcurrentLinkedQueue<ThreadContext>()
 
-    override fun help(): Boolean {
+    override fun runNext(): Boolean {
         val threadContext = currentThreadContext() ?: throw StateException("current thread does not belong to this context")
-        return threadContext.help()
+        return threadContext.runNext()
     }
 
     private fun currentThreadContext() = threadContexts.find { it.isCurrentThread() }
@@ -263,13 +263,16 @@ private class NonBlockingDispatcher(val name: String,
         return true
     }
 
+    private class TaskNode(val task: () -> Unit) {
+
+    }
 
     private inner class ThreadContext(val id: Int) : Runnable {
 
         private val pending = 0
-        private val running = 1
-        private val polling = 2
-        private val mutating = 3
+        private val polling = -1
+        private val mutating = -2
+        private val running = 1 // and higher indicates running tasks or nested running tasks
 
         private val state = AtomicInteger(pending)
         private val thread: Thread
@@ -378,15 +381,73 @@ private class NonBlockingDispatcher(val name: String,
             }
         }
 
-        fun help() : Boolean {
+        fun runNext(): Boolean {
+            //can only be called by self!
+            //So must be in a running or cancelling/mutating state.
 
-            //TODO, implement this properly
-            val function = pollStrategy.get()
-            if (function != null) {
-                function()
+            //get the current running state and set to mutating
+            var parentState: Int
+            do {
+                parentState = state.get()
+                if (parentState < running) continue
+            } while (!tryChangeState(parentState, mutating))
+
+
+
+
+
+            // don't use poll strategy, we are hoping more work
+            // because we are waiting for something to finish.
+            val fn = workQueue.poll(block = false)
+
+            //TODO setup or append task chain for cancellation
+
+            changeState(mutating, parentState + 1)
+
+            // can still be null if other threads have picked up the work
+            //we are waiting for
+            if (fn != null) {
+                try {
+                    fn()
+                } catch(e: InterruptedException) {
+                    // we only want to report unexpected interrupted exception. The expected
+                    // cases are cancellation of a task or a total shutdown of the dispatcher.
+                    // `pollResult == null` means the task has been cancelled.
+                    //TODO build a chain for cancellation
+                    if (pollResult != null && alive) {
+                        exceptionHandler(e)
+                    }
+
+                } catch(e: Exception) {
+                    exceptionHandler(e)
+                } catch(t: Throwable) {
+                    // I think the StackOverFlowError is the only one we can reasonably recover from since the
+                    // complete stack has been unwound at this point.
+                    if (t !is StackOverflowError) {
+                        // This can be anything. Most likely out of memory errors, so everything can go haywire
+                        // from here. Let's *try* to gracefully dismiss this thread by un registering from the pool and
+                        // die.
+                        deRegisterRequest(this, force = true)
+                    }
+
+                    // Try to report it
+                    errorHandler(t)
+
+
+                } finally {
+                    // No matter what, we are going to try to clear the interrupted flag if any.
+                    // this is because this thread can be in an interrupted state because of cancellation,
+                    // the fact that we might be dead or simply by user code which has bluntly called interrupt().
+                    // whatever reason we are going to clear it, because it interferes with polling for and running
+                    // the next task.
+                    Thread.interrupted()
+                }
+                //TODO, pop task chain
+                changeState(parentState + 1, parentState)
                 return true
             }
 
+            changeState(parentState + 1, parentState)
             return false
         }
 
@@ -488,7 +549,7 @@ private class YieldingPollStrategy<V : Any>(private val pollable: Pollable<V>,
             val value = pollable.poll(block = false)
             if (value != null) return value
             Thread.yield()
-            if (Thread.currentThread().isInterrupted()) break
+            if (Thread.currentThread().isInterrupted) break
         }
         return null
     }
@@ -508,7 +569,7 @@ private class BusyPollStrategy<V : Any>(private val pollable: Pollable<V>,
         for (i in 0..attempts) {
             val value = pollable.poll(block = false)
             if (value != null) return value
-            if (Thread.currentThread().isInterrupted()) break
+            if (Thread.currentThread().isInterrupted) break
         }
         return null
     }
