@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
 val numberOfWorkerThreads = Runtime.getRuntime().availableProcessors()
 val attempts = 10
 val warmupRounds = 100
-val performanceRounds = 1000
+val performanceRounds = 10000
 val napTimeSeconds = 3L
 val fibN = 13
 

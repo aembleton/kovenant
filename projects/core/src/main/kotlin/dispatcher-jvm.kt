@@ -442,15 +442,14 @@ private class NonBlockingDispatcher(val name: String,
                 } catch(e: Exception) {
                     exceptionHandler(e)
                 } catch(t: Throwable) {
-                    // I think the StackOverFlowError is the only one we can reasonably recover from since the
-                    // complete stack has been unwound at this point.
-                    if (t is StackOverflowError) {
 
-                        errorHandler(t)
-                    } else {
-                        // rethrow and let the main runner handle this
-                        throw t
+                    if (t is StackOverflowError) {
+                        println("running nested call $parentState")
+                        throw Error("StackOverflow", t)
                     }
+
+                    // rethrow and let the main runner handle this
+                    throw t
                 } finally {
                     // No matter what, we are going to try to clear the interrupted flag if any.
                     // this is because this thread can be in an interrupted state because of cancellation,
